@@ -10,11 +10,11 @@ def get_treasury_service(request: Request) -> TreasurySignerService:
     return request.app.state.treasury_service
 
 
-def get_current_wallet(request: Request, authorization: str | None = Header(default=None)) -> str:
+async def get_current_wallet(request: Request, authorization: str | None = Header(default=None)) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     token = authorization.split(" ", 1)[1]
-    return request.app.state.auth_service.read_wallet_from_token(token)
+    return await request.app.state.auth_service.read_wallet_from_token(token)
 
 
 @router.post("/rides/{ride_id}/complete/sign", response_model=CompleteRideSignResponse)

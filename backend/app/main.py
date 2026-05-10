@@ -24,6 +24,7 @@ from app.treasury.router import router as treasury_router
 from app.treasury.service import TreasurySignerService
 from app.tx.router import router as tx_router
 from app.tx.service import TxService
+from app.config import settings
 
 
 def create_app(init_db: bool = True) -> FastAPI:
@@ -52,7 +53,7 @@ def create_app(init_db: bool = True) -> FastAPI:
     from fastapi.middleware.cors import CORSMiddleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Allows all origins for local testing. Adjust in production!
+        allow_origins=settings.cors_allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

@@ -104,12 +104,38 @@ class AuthService:
             )
         return token
 
-    def read_wallet_from_token(self, token: str) -> str:
+    async def read_wallet_from_token(self, token: str) -> str:
+        if not self.db.pool:
+            raise RuntimeError("Database is not connected")
         try:
             payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-            return str(payload["sub"])
+            wallet = str(payload["sub"])
+            session_id = str(payload.get("jti", ""))
+            if not session_id:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        except HTTPException:
+            raise
         except Exception as error:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from error
+
+        async with self.db.pool.acquire() as connection:
+            session = await connection.fetchrow(
+                """
+                SELECT jwt_id, revoked, expires_at
+                FROM sessions
+                WHERE jwt_id = $1 AND wallet_address = $2
+                """,
+                session_id,
+                wallet.lower(),
+            )
+            if not session:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            if session["revoked"]:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
+            if session["expires_at"] < datetime.now(UTC):
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+
+        return wallet
 
     async def revoke_session(self, token: str) -> None:
         if not self.db.pool:
@@ -136,4 +162,3 @@ class AuthService:
                 """,
                 session_id,
             )
-

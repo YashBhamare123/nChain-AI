@@ -30,7 +30,7 @@ async def me(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     token = authorization.split(" ", 1)[1]
-    wallet = auth_service.read_wallet_from_token(token)
+    wallet = await auth_service.read_wallet_from_token(token)
     return MeResponse(wallet=wallet)
 
 
@@ -44,4 +44,3 @@ async def logout(
     token = authorization.split(" ", 1)[1]
     await auth_service.revoke_session(token)
     return LogoutResponse()
-

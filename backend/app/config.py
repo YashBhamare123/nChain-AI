@@ -7,7 +7,7 @@ class Settings:
             "DATABASE_URL",
             "postgresql://postgres:password@localhost:5432/offchain",
         )
-        self.jwt_secret = os.getenv("JWT_SECRET", "dev-secret")
+        self.jwt_secret = os.getenv("JWT_SECRET", "")
         self.jwt_algorithm = "HS256"
         self.nonce_ttl_seconds = 300
         self.access_token_ttl_seconds = 3600
@@ -33,6 +33,22 @@ class Settings:
         self.pinata_jwt = os.getenv("PINATA_JWT", "")
         self.pinata_base_url = os.getenv("PINATA_BASE_URL", "https://api.pinata.cloud")
         self.pinata_review_name_prefix = os.getenv("PINATA_REVIEW_NAME_PREFIX", "nchain-review")
+        self.cors_allowed_origins = self._parse_cors_allowed_origins(
+            os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:8080,http://localhost:5173"),
+        )
+        self._validate_security_settings()
+
+    @staticmethod
+    def _parse_cors_allowed_origins(raw: str) -> list[str]:
+        origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+        # Defensive fallback for local development if env var is accidentally blank.
+        return origins or ["http://localhost:8080", "http://localhost:5173"]
+
+    def _validate_security_settings(self) -> None:
+        if not self.jwt_secret:
+            raise ValueError("JWT_SECRET is required and cannot be empty")
+        if self.jwt_secret.strip().lower() in {"dev-secret", "changeme", "replace-me", "placeholder"}:
+            raise ValueError("JWT_SECRET uses an insecure placeholder value")
 
 
 settings = Settings()

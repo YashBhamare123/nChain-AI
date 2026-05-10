@@ -8,11 +8,11 @@ router = APIRouter(tags=["admin"])
 _admin_service = AdminService()
 
 
-def get_current_wallet(request: Request, authorization: str | None = Header(default=None)) -> str:
+async def get_current_wallet(request: Request, authorization: str | None = Header(default=None)) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     token = authorization.split(" ", 1)[1]
-    return request.app.state.auth_service.read_wallet_from_token(token)
+    return await request.app.state.auth_service.read_wallet_from_token(token)
 
 
 class RegisterDriverRequest(BaseModel):
@@ -31,9 +31,19 @@ async def register_driver(
 ) -> RegisterDriverResponse:
     """
     Submits a registerDriver() transaction on-chain using the owner key.
-    Any authenticated user can request registration for themselves — the
-    backend uses the treasury (owner) key to sign and broadcast the tx.
+    Driver registration requests are accepted only when the requested
+    driver_address matches the caller wallet.
+
+    In production, this endpoint is intended to be called only after KYC
+    verification is completed. KYC workflow is not implemented in this MVP.
     """
+    caller = wallet.lower()
     target = payload.driver_address.lower()
+    if caller != target:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Driver registration allowed only for caller wallet",
+        )
+
     tx_hash = await _admin_service.register_driver_onchain(target)
     return RegisterDriverResponse(tx_hash=tx_hash, driver_address=target)

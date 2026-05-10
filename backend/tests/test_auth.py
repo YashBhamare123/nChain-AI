@@ -82,3 +82,28 @@ def test_me_endpoint_returns_wallet_from_bearer_token() -> None:
         me_response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert me_response.status_code == 200
         assert me_response.json()["wallet"] == wallet.lower()
+
+
+def test_revoked_token_is_rejected_after_logout() -> None:
+    clean_auth_nonce_table()
+    account = Account.create()
+    wallet = account.address
+
+    with create_test_client() as client:
+        nonce_response = client.post("/api/v1/auth/nonce", json={"wallet": wallet})
+        nonce = nonce_response.json()["nonce"]
+
+        message = encode_defunct(text=wallet_message(nonce))
+        signed = Account.sign_message(message, account.key)
+
+        verify_response = client.post(
+            "/api/v1/auth/verify",
+            json={"wallet": wallet, "nonce": nonce, "signature": signed.signature.to_0x_hex()},
+        )
+        token = verify_response.json()["accessToken"]
+
+        logout_response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"})
+        assert logout_response.status_code == 200
+
+        me_response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me_response.status_code == 401
