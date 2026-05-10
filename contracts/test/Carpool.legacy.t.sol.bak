@@ -1,0 +1,326 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "forge-std/Test.sol";
+import "../src/Carpool.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+
+contract CarpoolTest is Test {
+    using MessageHashUtils for bytes32;
+
+    Carpool internal cp;
+
+    uint256 internal ownerPk = 0xA11CE;
+    uint256 internal backendPk = 0xB0B;
+    uint256 internal driverPk = 0xD1;
+    uint256 internal riderPk = 0xE1;
+    uint256 internal rider2Pk = 0xE2;
+    uint256 internal strangerPk = 0xFA;
+
+    address internal owner;
+    address internal backend;
+    address internal driver;
+    address internal rider;
+    address internal rider2;
+    address internal stranger;
+
+    uint256 internal constant MIN_DEPOSIT = 1 ether;
+    uint256 internal constant BOND_PERCENT = 20;
+    uint256 internal constant DELAY_THRESHOLD = 120;
+    uint256 internal constant SURCHARGE_PER_SECOND = 1e12;
+
+    function setUp() public {
+        owner = vm.addr(ownerPk);
+        backend = vm.addr(backendPk);
+        driver = vm.addr(driverPk);
+        rider = vm.addr(riderPk);
+        rider2 = vm.addr(rider2Pk);
+        stranger = vm.addr(strangerPk);
+
+        cp = new Carpool(owner, backend, MIN_DEPOSIT, BOND_PERCENT, DELAY_THRESHOLD, SURCHARGE_PER_SECOND);
+
+        vm.deal(owner, 100 ether);
+        vm.deal(driver, 100 ether);
+        vm.deal(rider, 100 ether);
+        vm.deal(rider2, 100 ether);
+        vm.deal(stranger, 100 ether);
+    }
+
+    function _signDriverAccept(
+        address riderAddr,
+        address driverAddr,
+        uint256 fare,
+        bool ceiling,
+        uint256 nonce,
+        uint256 signerPk
+    ) internal view returns (bytes memory) {
+        bytes32 digest = keccak256(abi.encode(riderAddr, driverAddr, fare, ceiling, nonce, block.chainid))
+            .toEthSignedMessageHash();
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _signR1Shared(
+        uint256 rideId,
+        uint256 refund,
+        uint256 deadline,
+        uint256 nonce,
+        uint256 signerPk
+    ) internal view returns (bytes memory) {
+        bytes32 digest = keccak256(abi.encode("R1", rideId, refund, deadline, nonce, block.chainid)).toEthSignedMessageHash();
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _signDriverShared(
+        uint256 rideId,
+        uint256 incentive,
+        uint256 deadline,
+        uint256 nonce,
+        uint256 signerPk
+    ) internal view returns (bytes memory) {
+        bytes32 digest = keccak256(abi.encode("D", rideId, incentive, deadline, nonce, block.chainid)).toEthSignedMessageHash();
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _registerAndActivateDriver() internal {
+        vm.prank(owner);
+        cp.registerDriver(driver, keccak256("id-1"), keccak256("doc-1"));
+
+        vm.prank(driver);
+        cp.depositDriverCollateral{value: MIN_DEPOSIT}();
+
+        (, , , , , Carpool.DriverStatus st,) = cp.drivers(driver);
+        assertEq(uint256(st), uint256(Carpool.DriverStatus.Active));
+    }
+
+    function _acceptRide(uint256 fare, bool ceiling) internal returns (uint256 rideId) {
+        vm.prank(rider);
+        cp.registerUser();
+
+        uint256 nonce = cp.driverNonces(driver);
+        bytes memory sig = _signDriverAccept(rider, driver, fare, ceiling, nonce, driverPk);
+        uint256 required = fare + (ceiling ? (fare * BOND_PERCENT) / 100 : 0);
+
+        vm.prank(rider);
+        rideId = cp.acceptRide{value: required}(driver, fare, ceiling, sig);
+    }
+
+    function test_RegisterDriverAndActivate() public {
+        _registerAndActivateDriver();
+
+        (address dAddr,, , , uint256 deposited, Carpool.DriverStatus st, bool onRide) = cp.drivers(driver);
+        assertEq(dAddr, driver);
+        assertEq(deposited, MIN_DEPOSIT);
+        assertEq(uint256(st), uint256(Carpool.DriverStatus.Active));
+        assertEq(onRide, false);
+    }
+
+    function test_Revert_RegisterDriver_Unauthorized() public {
+        vm.expectRevert();
+        vm.prank(stranger);
+        cp.registerDriver(driver, keccak256("id"), keccak256("doc"));
+    }
+
+    function test_AcceptRide_HappyPath() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        uint256 rideId = _acceptRide(fare, true);
+
+        assertEq(rideId, 0);
+        assertEq(cp.driverNonces(driver), 1);
+
+        (address user, address drv, , , uint256 storedFare, , uint256 bond, , , , , , Carpool.RideStatus status) = cp.rides(rideId);
+        assertEq(user, rider);
+        assertEq(drv, driver);
+        assertEq(storedFare, fare);
+        assertEq(bond, fare * BOND_PERCENT / 100);
+        assertEq(uint256(status), uint256(Carpool.RideStatus.Accepted));
+    }
+
+    function test_Revert_AcceptRide_InvalidSignature() public {
+        _registerAndActivateDriver();
+        vm.prank(rider);
+        cp.registerUser();
+
+        uint256 fare = 1 ether;
+        uint256 nonce = cp.driverNonces(driver);
+        bytes memory badSig = _signDriverAccept(rider, driver, fare, true, nonce, strangerPk);
+
+        vm.expectRevert(bytes("Invalid driver sig"));
+        vm.prank(rider);
+        cp.acceptRide{value: fare + (fare * BOND_PERCENT) / 100}(driver, fare, true, badSig);
+    }
+
+    function test_StartAndCompleteRide_HappyPath() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        uint256 rideId = _acceptRide(fare, true);
+
+        vm.prank(driver);
+        cp.startRide(rideId, 12971600, 77594600, 12935200, 77624500, 300);
+
+        vm.warp(block.timestamp + 500);
+
+        vm.prank(driver);
+        cp.completeRide(rideId);
+
+        (, , , , , uint256 finalFare, , , , , , , Carpool.RideStatus status) = cp.rides(rideId);
+        assertEq(uint256(status), uint256(Carpool.RideStatus.Completed));
+        assertGt(finalFare, fare);
+
+        uint256 pending = cp.pendingWithdrawals(driver);
+        assertGt(pending, 0);
+    }
+
+    function test_JoinSharedRide_HappyPath() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        uint256 rideId = _acceptRide(fare, false);
+
+        vm.prank(driver);
+        cp.startRide(rideId, 1, 2, 3, 4, 500);
+
+        uint256 refund = 0.2 ether;
+        uint256 incentive = 0.1 ether;
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 nonce = cp.shareApprovalNonces(rider);
+
+        bytes memory r1Sig = _signR1Shared(rideId, refund, deadline, nonce, riderPk);
+        bytes memory dSig = _signDriverShared(rideId, incentive, deadline, nonce, driverPk);
+
+        vm.prank(rider2);
+        cp.joinSharedRide{value: refund + incentive}(rideId, refund, incentive, deadline, r1Sig, dSig);
+
+        Carpool.Ride memory rideState = cp.getRide(rideId);
+        Carpool.SharedRideInfo memory sharedInfo = rideState.sharedInfo;
+        assertEq(sharedInfo.secondUser, rider2);
+        assertEq(sharedInfo.rider1Refund, refund);
+        assertEq(sharedInfo.driverShareFromR2, incentive);
+    }
+
+    function test_Revert_JoinSharedRide_ExpiredDeadline() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        uint256 rideId = _acceptRide(fare, false);
+
+        vm.prank(driver);
+        cp.startRide(rideId, 1, 2, 3, 4, 500);
+
+        uint256 refund = 0.2 ether;
+        uint256 incentive = 0.1 ether;
+        uint256 deadline = block.timestamp + 1;
+        uint256 nonce = cp.shareApprovalNonces(rider);
+
+        bytes memory r1Sig = _signR1Shared(rideId, refund, deadline, nonce, riderPk);
+        bytes memory dSig = _signDriverShared(rideId, incentive, deadline, nonce, driverPk);
+
+        vm.warp(deadline + 1);
+        vm.expectRevert(bytes("Approval expired"));
+        vm.prank(rider2);
+        cp.joinSharedRide{value: refund + incentive}(rideId, refund, incentive, deadline, r1Sig, dSig);
+    }
+
+    function test_CancelRide_HappyPath() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        uint256 rideId = _acceptRide(fare, true);
+
+        vm.prank(driver);
+        cp.startRide(rideId, 1, 2, 3, 4, 100);
+
+        uint256 riderBalBefore = rider.balance;
+        vm.prank(rider);
+        cp.cancelRide(rideId);
+        uint256 riderBalAfter = rider.balance;
+
+        assertGt(riderBalAfter, riderBalBefore);
+    }
+
+    function test_DisputeAndResolve_HappyPath() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        uint256 rideId = _acceptRide(fare, true);
+
+        vm.prank(driver);
+        cp.startRide(rideId, 1, 2, 3, 4, 100);
+
+        vm.prank(rider);
+        cp.disputeRide(rideId);
+
+        vm.prank(owner);
+        cp.resolveDispute(rideId, 0.7 ether);
+
+        (, , , , , uint256 finalFare, , , , , , , Carpool.RideStatus status) = cp.rides(rideId);
+        assertEq(uint256(status), uint256(Carpool.RideStatus.Completed));
+        assertEq(finalFare, 0.7 ether);
+    }
+
+    function test_RateDriver_HappyPath() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        uint256 rideId = _acceptRide(fare, false);
+
+        vm.prank(driver);
+        cp.startRide(rideId, 1, 2, 3, 4, 100);
+
+        vm.warp(block.timestamp + 120);
+        vm.prank(driver);
+        cp.completeRide(rideId);
+
+        vm.prank(rider);
+        cp.rateDriver(rideId, 5);
+
+        (, , uint256 rating, uint256 ratingCount, , ,) = cp.drivers(driver);
+        assertEq(rating, 5);
+        assertEq(ratingCount, 1);
+    }
+
+    function test_Revert_RateDriver_Twice() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        uint256 rideId = _acceptRide(fare, false);
+
+        vm.prank(driver);
+        cp.startRide(rideId, 1, 2, 3, 4, 100);
+
+        vm.warp(block.timestamp + 120);
+        vm.prank(driver);
+        cp.completeRide(rideId);
+
+        vm.prank(rider);
+        cp.rateDriver(rideId, 4);
+
+        vm.expectRevert(bytes("Already rated"));
+        vm.prank(rider);
+        cp.rateDriver(rideId, 5);
+    }
+
+    function test_WithdrawCollateralAndWithdraw_HappyPath() public {
+        _registerAndActivateDriver();
+
+        vm.prank(driver);
+        cp.withdrawCollateral(0.4 ether);
+
+        assertEq(cp.pendingWithdrawals(driver), 0.4 ether);
+
+        uint256 balBefore = driver.balance;
+        vm.prank(driver);
+        cp.withdraw();
+        uint256 balAfter = driver.balance;
+
+        assertGt(balAfter, balBefore);
+        assertEq(cp.pendingWithdrawals(driver), 0);
+    }
+
+    function test_Revert_WithdrawCollateral_WhenOnRide() public {
+        _registerAndActivateDriver();
+        uint256 fare = 1 ether;
+        _acceptRide(fare, false);
+
+        vm.expectRevert(bytes("Driver on active ride"));
+        vm.prank(driver);
+        cp.withdrawCollateral(0.1 ether);
+    }
+}
