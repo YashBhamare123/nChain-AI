@@ -1,7 +1,19 @@
+<table>
+<tr>
+<td>
+
 # nChainRide: Decentralized Ride-Sharing DApp
 
 nChainRide is a full-stack Web3 ride-sharing platform that combines trustless on-chain settlement with practical off-chain application services. The project is built around a hybrid architecture in which Ethereum smart contracts enforce financial integrity and lifecycle correctness, while backend and frontend systems deliver matching, location-aware UX, and operational orchestration.
 
+</td>
+<td>
+
+<img src="assets/nchainride-logo.png" alt="nChainRide Logo" width="180"/>
+
+</td>
+</tr>
+</table>
 ## Team Members
 | Team Member | Roll Number |
 | --- | --- |
