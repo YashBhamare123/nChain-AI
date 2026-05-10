@@ -14,6 +14,7 @@ nChainRide is a full-stack Web3 ride-sharing platform that combines trustless on
 </td>
 </tr>
 </table>
+
 ## Team Members
 | Team Member | Roll Number |
 | --- | --- |
