@@ -452,7 +452,7 @@ contract Carpool is Ownable, ReentrancyGuard {
 
     /// @notice Returns full stored ride details as a memory struct.
     /// @param id Ride id to query.
-    /// @return Ride memory struct for the given id.
+    /// @return ride Ride memory struct for the given id.
     function getRide(uint256 id) external view returns (Ride memory ride) {
         return rides[id];
     }
