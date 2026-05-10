@@ -4,6 +4,7 @@ from app.tx.schemas import (
     AcceptRidePrepRequest,
     AcceptRidePrepResponse,
     CompleteRidePrepRequest,
+    DisputeRidePrepRequest,
     GenericTxPrepResponse,
     JoinSharedRidePrepRequest,
     RateDriverPrepRequest,
@@ -80,3 +81,12 @@ async def prepare_resolve_dispute(
 ) -> GenericTxPrepResponse:
     _ = wallet
     return await tx_service.prepare_resolve_dispute(payload)
+
+
+@router.post("/tx/dispute-ride", response_model=GenericTxPrepResponse)
+async def prepare_dispute_ride(
+    payload: DisputeRidePrepRequest,
+    wallet: str = Depends(get_current_wallet),
+    tx_service: TxService = Depends(get_tx_service),
+) -> GenericTxPrepResponse:
+    return await tx_service.prepare_dispute_ride(wallet, payload)

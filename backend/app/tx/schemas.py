@@ -64,6 +64,11 @@ class JoinSharedRidePrepRequest(BaseModel):
     chainId: int | None = Field(default=None, ge=1)
 
 
+class DisputeRidePrepRequest(BaseModel):
+    rideId: str
+    chainId: int | None = Field(default=None, ge=1)
+
+
 class ResolveDisputePrepRequest(BaseModel):
     rideId: str
     payoutWei: str

@@ -6,6 +6,7 @@ from app.tx.schemas import (
     AcceptRidePrepRequest,
     AcceptRidePrepResponse,
     CompleteRidePrepRequest,
+    DisputeRidePrepRequest,
     GenericTxPrepResponse,
     JoinSharedRidePrepRequest,
     RateDriverPrepRequest,
@@ -197,6 +198,29 @@ class TxService:
                 payload.driverSignature,
             ],
             msgValueWei=str(msg_value),
+            rideId=payload.rideId,
+            onchainRideId=onchain_ride_id,
+            chainId=payload.chainId,
+        )
+
+    async def prepare_dispute_ride(self, wallet: str, payload: DisputeRidePrepRequest) -> GenericTxPrepResponse:
+        if not self.db.pool:
+            raise RuntimeError("Database is not connected")
+        wallet = wallet.lower()
+        async with self.db.pool.acquire() as connection:
+            ride = await connection.fetchrow("SELECT * FROM ride_requests WHERE id = $1", payload.rideId)
+            if not ride:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ride not found")
+            is_rider = str(ride["rider_wallet"]).lower() == wallet
+            is_driver = str(ride["selected_driver_wallet"] or "").lower() == wallet
+            if not is_rider and not is_driver:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorised to dispute this ride")
+        onchain_ride_id = self._require_onchain_ride_id(ride, payload.rideId)
+        return GenericTxPrepResponse(
+            contractAddress=settings.carpool_contract_address,
+            functionName="disputeRide",
+            args=[onchain_ride_id],
+            msgValueWei="0",
             rideId=payload.rideId,
             onchainRideId=onchain_ride_id,
             chainId=payload.chainId,
